@@ -266,23 +266,33 @@ class MarkerChartCanvasImpl extends React.PureComponent<Props, State> {
     h: CssPixels,
     uncutWidth: CssPixels,
     text: string,
+    useRange: boolean,
     backgroundColor: string = BLUE_40,
     foregroundColor: string = 'white'
   ) {
     ctx.fillStyle = backgroundColor;
+    ctx.strokeStyle = backgroundColor; // Never reset
 
     const textMeasurement = this._getTextMeasurement(ctx);
 
+    // To have a clear margin, increment y and decrement h (twice, for both margins).
     if (uncutWidth >= h) {
-      // We want the rectangle to have a clear margin, that's why we increment y
-      // and decrement h (twice, for both margins).
-      this.drawRoundedRect(ctx, x, y + 1, w, h - 2, 1);
+      let margin;
+      if (useRange) {
+        this.drawRange(ctx, x, y + 1, w, h - 2, 1);
+        const FUDGE_FACTOR_1 = 6;
+        margin = (h - 2) / 4 + FUDGE_FACTOR_1;
+      } else {
+        this.drawRoundedRect(ctx, x, y + 1, w, h - 2, 1);
+        margin = 0;
+      }
 
       // Draw the text label
       // TODO - L10N RTL.
       // Constrain the x coordinate to the leftmost area.
-      const x2: CssPixels = x + TEXT_OFFSET_START;
-      const w2: CssPixels = Math.max(0, w - (x2 - x));
+      const x2: CssPixels = x + TEXT_OFFSET_START + margin;
+      const FUDGE_FACTOR_2 = 15; // getFittedText is overflowing the region on my machine.
+      const w2: CssPixels = Math.max(0, w - (TEXT_OFFSET_START * 2 + margin * 2 + FUDGE_FACTOR_2));
 
       if (w2 > textMeasurement.minWidth) {
         const fittedText = textMeasurement.getFittedText(text, w2);
@@ -390,13 +400,14 @@ class MarkerChartCanvasImpl extends React.PureComponent<Props, State> {
 
           const text = markerTiming.label[i];
           const markerIndex = markerTiming.index[i];
+          const useRange = ["GCMajor", "Jank", "LongTask", "TelemetryStopwatch"].includes(markerTiming.name);
 
           const isHighlighted =
             rightClickedMarkerIndex === markerIndex ||
             hoveredItem === markerIndex;
 
           if (isHighlighted) {
-            highlightedMarkers.push({ x, y, w, h, uncutWidth, text });
+            highlightedMarkers.push({ x, y, w, h, uncutWidth, text, useRange });
           } else if (
             // Always render non-dot markers.
             uncutWidth > DOT_WIDTH ||
@@ -405,7 +416,7 @@ class MarkerChartCanvasImpl extends React.PureComponent<Props, State> {
             x !== previousMarkerDrawnAtX
           ) {
             previousMarkerDrawnAtX = x;
-            this.drawOneMarker(ctx, x, y, w, h, uncutWidth, text);
+            this.drawOneMarker(ctx, x, y, w, h, uncutWidth, text, useRange, BLUE_40, useRange ? 'black' : 'white');
           }
         }
       }
@@ -413,17 +424,18 @@ class MarkerChartCanvasImpl extends React.PureComponent<Props, State> {
 
     // We draw highlighted markers after the normal markers so that they stand
     // out more.
-    highlightedMarkers.forEach(highlightedMarker => {
+    highlightedMarkers.forEach(({x, y, w, h, uncutWidth, text, useRange}) => {
       this.drawOneMarker(
         ctx,
-        highlightedMarker.x,
-        highlightedMarker.y,
-        highlightedMarker.w,
-        highlightedMarker.h,
-        highlightedMarker.uncutWidth,
-        highlightedMarker.text,
+        x,
+        y,
+        w,
+        h,
+        uncutWidth,
+        text,
+        useRange,
         'Highlight', //    background color
-        'HighlightText' // foreground color
+        useRange ? 'black' : 'HighlightText' // foreground color
       );
     });
   }
@@ -665,6 +677,76 @@ class MarkerChartCanvasImpl extends React.PureComponent<Props, State> {
     ctx.fillRect(x + c, y, width - 2 * c, c);
     ctx.fillRect(x, y + c, width, height - 2 * c);
     ctx.fillRect(x + c, bottom - c, width - 2 * c, c);
+  }
+
+  drawRange(
+    ctx: CanvasRenderingContext2D,
+    x: CssPixels,
+    y: CssPixels,
+    width: CssPixels,
+    height: CssPixels,
+    cornerSize: CssPixels
+  ) {
+    if (false) {
+      // Option 1: Same as the usual rectangular region, but replace the main
+      // body with a dashed line .
+
+      // Cut out c x c -sized squares in the corners.
+      const c = Math.min(width / 2, height / 2, cornerSize);
+      const buffer = c;
+
+      // Draw the buffer regions.
+      ctx.fillRect(x + c, y, buffer, height);
+      ctx.fillRect(x + width - c - buffer, y, buffer, height);
+
+      // Draw side cap squares. Note: this handle the case where there isn't
+      // enough space for the side caps.
+      ctx.fillRect(x, y + c, c, height - c * 2);
+      ctx.fillRect(x + width - c, y + c, c, height - c * 2);
+
+      // Draw a dashed line between the side caps.
+      ctx.setLineDash([2, 1]);
+      ctx.beginPath();
+      ctx.moveTo(x + c + buffer, y + height / 2);
+      ctx.lineTo(x + width - c - buffer, y + height / 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    } else {
+      // Option 2: A more traditional arrow with short vertical line segments at the ends.
+
+      const endwidth = 1.5;
+      const aw = height / 4; // width of arrowheads
+
+      ctx.beginPath();
+
+      // Draw left arrowhead
+      const left = x + endwidth;
+      ctx.moveTo(left, y + height / 2);
+      ctx.lineTo(left + aw, y + height / 2 - aw);
+      ctx.moveTo(left, y + height / 2);
+      ctx.lineTo(left + aw, y + height / 2 + aw);
+
+      // Draw right arrowhead
+      const right = x + width - endwidth;
+      ctx.moveTo(right, y + height / 2);
+      ctx.lineTo(right - aw, y + height / 2 - aw);
+      ctx.moveTo(right, y + height / 2);
+      ctx.lineTo(right - aw, y + height / 2 + aw);
+
+      ctx.stroke();
+
+      // Draw end caps
+      ctx.fillRect(x, y, endwidth, height);
+      ctx.fillRect(right, y, endwidth, height);
+
+      // Draw dashed line in between
+      ctx.setLineDash([2, 1]);
+      ctx.beginPath();
+      ctx.moveTo(x + aw, y + height / 2);
+      ctx.lineTo(x + width - aw, y + height / 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
   }
 
   getHoveredMarkerInfo = ({
